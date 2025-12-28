@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>노블 카드 생성기 V47(fix)</title>
+  <title>노블 카드 생성기 V48</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.js"></script>
   <style>
     /* 폰트 로드 */
@@ -30,7 +30,10 @@
         flex-direction: column; 
         border-top: 1px solid #cbd5e1;
         border-radius: 20px 20px 0 0;
-        transition: transform 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+        height: 50vh;      /* 기본 높이는 화면 절반 */
+        max-height: 90vh;  /* 너무 커지지 않게 제한 */
+        min-height: 150px; /* 너무 작아지지 않게 제한 */
+        transition: transform 0.3s cubic-bezier(0.25, 1, 0.5, 1); 
     }
     
     /* 접혔을 때 (화면 아래로 숨김) */
@@ -39,7 +42,7 @@
     /* 책갈피 (인덱스 탭) 핸들 */
     .index-handle {
         position: absolute;
-        top: -45px;
+        top: -30px; /* 핸들 크기에 맞춰 위치 조정 */
         left: 50%;
         transform: translateX(-50%);
         width: 140px;
@@ -57,7 +60,9 @@
         border-bottom: 1px solid #fff; /* 자연스럽게 이어지도록 */
         z-index: 2001;
         font-size: 14px;
-        gap: 6px;
+        cursor: ns-resize; /* 마우스 올리면 위아래 화살표로 변신! */
+        touch-action: none; /* 모바일에서 스크롤 방지하고 드래그 인식 */
+        user-select: none;  /* 드래그할 때 글자 선택 방지 */
     }
     .index-handle:hover { background: #f8fafc; color: #2563eb; }
 
@@ -66,7 +71,7 @@
     
     .main-controls { padding: 10px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     
-    .editor-content-wrapper { padding: 16px; max-height: 50vh; overflow-y: auto; background: #fff; }
+    .editor-content-wrapper { padding: 16px; flex-grow: 1; overflow-y: auto; background: #fff; }
     
     /* 패널 및 탭 */
     .control-panel { background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 12px; padding: 16px; margin-bottom: 16px; box-shadow: 0 4px 6px rgba(59, 130, 246, 0.05); }
@@ -190,7 +195,7 @@
     </div>
 
     <div class="editor-header-bar" onclick="toggleEditor()">
-      <div class="editor-title">카드 에디터 V47(fix)</div> 
+      <div class="editor-title">카드 에디터 V48</div> 
       <div style="display:flex; gap:8px;">
         <button class="btn-reset" onclick="resetAll(event)">🔄 초기화</button>
         <button class="btn-save" onclick="event.stopPropagation(); saveImage()">📸 저장</button>
@@ -201,7 +206,7 @@
       <span style="font-size:13px; font-weight:bold;">카드 폭:</span>
       <input type="number" id="cardWidthInput" value="400" step="10" style="width:60px; padding:6px; border:1px solid #cbd5e1; border-radius:6px;" oninput="updatePreview(); saveData();"> px
       <div style="flex-grow:1"></div>
-      <button class="btn-style" onclick="toggleStylePanel()">🎨 스타일 설정 ▼</button>
+      <button id="btnStyleToggle" class="btn-style" onclick="toggleStylePanel()">🎨 스타일 설정 ▼</button>
     </div>
 
     <div id="editorContent" class="editor-content-wrapper">
@@ -547,39 +552,104 @@
       });
     }
 
-    // --- 수정된 기능: HTML 태그는 보호하고 말풍선 <-> 따옴표 토글 ---
+    // --- 1. 말풍선 변환 로직 (완전 튼튼해짐! 💪) ---
     function toggleConvMode(i) {
         let content = blocks[i].content;
         
-        // 1. [핵심] HTML 태그를 찾아서 잠시 다른 문자로 숨겨두기 (마스킹)
+        // HTML 태그 보호 (마스킹)
         const tags = [];
-        const safeContent = content.replace(/<[^>]+>/g, function(match) {
-            tags.push(match); // 태그 내용을 배열에 저장
-            return `__PROTECTED_TAG_${tags.length - 1}__`; // 자리에 번호표 붙여두기
+        let safeContent = content.replace(/<[^>]+>/g, function(match) {
+            tags.push(match);
+            return `__PROTECTED_TAG_${tags.length - 1}__`;
         });
 
-        // 2. 태그가 숨겨진 상태에서 변환 로직 수행
-        let converted = safeContent;
+        // 줄 단위로 쪼개서 검사 (정규식 오류 원천 차단)
+        let lines = safeContent.split('\n');
         
-        // (A) ">> " 가 포함되어 있으면 -> 따옴표("")로 변환
-        if (converted.includes('>> ')) {
-            converted = converted.replace(/^>> (.*)$/gm, '"$1"');
-        } 
-        // (B) ">> " 가 없으면 -> 따옴표("")를 >> 로 변환
-        else {
-             converted = converted.replace(/"(.*?)"/g, '>> $1');
-        }
+        // ">> "가 하나라도 있는지 확인 (있으면 -> 따옴표 모드로 변환)
+        const hasArrow = lines.some(line => line.trim().startsWith('>> '));
+
+        lines = lines.map(line => {
+            const trimmed = line.trim();
+            if (hasArrow) {
+                // [>> -> 따옴표] 변환 모드
+                if (trimmed.startsWith('>> ')) {
+                    // ">> 내용" 을 "내용" 으로 변경
+                    return line.replace('>> ', '"') + '"'; 
+                }
+            } else {
+                // [따옴표 -> >>] 변환 모드
+                // "내용" 형태인지 확인 (앞뒤 따옴표)
+                if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+                    // 앞뒤 따옴표 제거하고 >> 붙이기
+                    let inner = trimmed.substring(1, trimmed.length - 1);
+                    return '>> ' + inner;
+                }
+            }
+            return line; // 해당 안 되면 그대로 둠 (ex: << 유저 말풍선)
+        });
         
-        // 3. [핵심] 번호표를 다시 원래 HTML 태그로 복구하기 (언마스킹)
-        content = converted.replace(/__PROTECTED_TAG_(\d+)__/g, function(match, id) {
+        safeContent = lines.join('\n');
+
+        // 태그 복구 (언마스킹)
+        content = safeContent.replace(/__PROTECTED_TAG_(\d+)__/g, function(match, id) {
             return tags[id];
         });
         
         // 결과 적용
         blocks[i].content = content;
-        document.getElementById(`editor-${i}`).value = content;
+        const editorEl = document.getElementById(`editor-${i}`);
+        if(editorEl) editorEl.value = content;
         updateTextContent(i, content);
     }
+
+    // --- 2. 스타일 패널 토글 (화살표 움직임 추가) ---
+    function toggleStylePanel(){ 
+        const s = document.getElementById('styleBody'); 
+        const b = document.getElementById('btnStyleToggle');
+        
+        if (s.style.display === 'none') {
+            s.style.display = 'block';
+            if(b) b.innerText = '🎨 스타일 설정 ▲'; // 열리면 위쪽 화살표
+        } else {
+            s.style.display = 'none';
+            if(b) b.innerText = '🎨 스타일 설정 ▼'; // 닫히면 아래쪽 화살표
+        }
+    }
+
+    // --- 3. 드로어 높이 조절 (드래그 기능) ---
+    // (페이지 로드 후 실행되도록 맨 아래에 둠)
+    setTimeout(() => {
+        const handle = document.querySelector('.index-handle');
+        const editorArea = document.getElementById('editorArea');
+        let isDragging = false;
+        let startY = 0;
+        let startHeight = 0;
+
+        if(handle && editorArea) {
+            handle.addEventListener('pointerdown', function(e) {
+                if(e.target.id === 'foldIcon') return; // 아이콘 클릭은 제외
+                isDragging = true;
+                startY = e.clientY;
+                startHeight = editorArea.getBoundingClientRect().height;
+                handle.setPointerCapture(e.pointerId);
+                editorArea.style.transition = 'none'; // 드래그 중엔 애니메이션 끄기
+            });
+
+            handle.addEventListener('pointermove', function(e) {
+                if (!isDragging) return;
+                const delta = startY - e.clientY; // 위로 가면 양수
+                editorArea.style.height = `${startHeight + delta}px`;
+            });
+
+            handle.addEventListener('pointerup', function(e) {
+                isDragging = false;
+                handle.releasePointerCapture(e.pointerId);
+                editorArea.style.transition = 'transform 0.3s cubic-bezier(0.25, 1, 0.5, 1)';
+            });
+        }
+    }, 500);
+
 
 
     function updateTextContent(i, val) {
